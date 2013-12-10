@@ -3,7 +3,7 @@
 -behaviour(gen_fsm).
 
 %% API
--export([start_link/2]).
+-export([start_link/3]).
 
 %% gen_fsm callbacks
 -export([init/1,
@@ -18,7 +18,8 @@
          code_change/4]).
 
 -record(player, {name, pid, role, tiles = []}).
--record(state, {limit = 60000,
+-record(state, {id,
+                limit = 60000,
                 players=[],
                 queue,
                 sets,
@@ -30,23 +31,23 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-start_link(Name, Pid) ->
-    gen_fsm:start_link(?MODULE, [Name, Pid], []).
+start_link(Id, Name, Pid) ->
+    gen_fsm:start_link(?MODULE, [Id, Name, Pid], []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
 %%%===================================================================
-init([Name, Pid]) ->
-    State = #state{players = [#player{name=Name,
-                                      pid=Pid,
-                                      role=owner}]},
+init([Id, Name, Pid]) ->
+    State = #state{id = Id, players = [#player{name=Name,
+                                               pid=Pid,
+                                               role=owner}]},
     erlang:monitor(process, Pid),
     {ok, initial, State}.
 
 initial(_Event, State) ->
     {next_state, initial, State}.
 
-initial({join, User}, {Pid,_}, State) ->
+initial({join, User, Pid}, _From, State) ->
     {Reply, NewState} = handle_join(User, Pid, State),
     {reply, Reply, initial, NewState};
 initial(start, {Pid,_}, State) ->
@@ -63,6 +64,8 @@ play(peek, {Pid,_}, State) ->
 play({put, List}, {Pid,_}, State) ->
     {reply, ok, play, State}.
 
+handle_event({exit_room, Pid}, StateName, State) ->
+    handle_down(Pid, StateName, State);
 handle_event(_Event, StateName, State) ->
     {next_state, StateName, State}.
 
@@ -87,33 +90,50 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%=================================================================== 
-handle_down(Pid, StateName, #state{players=Players}=State) ->
+handle_down(Pid, StateName, #state{players=Players, id=Id}=State) ->
     case is_owner(Pid, Players) of
         true ->
-            {stop, <<"Owner exited">>, State};
+            broadcast(exit, State),
+            {stop, normal, State};
         false ->
-            %% todo
-            {next_state, StateName, State}
+            NewPlayers = case lists:keyfind(Pid, #player.pid, Players) of
+                #player{name=Username} ->
+                    rummy_lobby:exit_room(Id, Username),
+                    broadcast({exit, Username}, State),
+                    lists:keydelete(Pid, #player.pid, Players);
+                _ ->
+                    Players
+            end,
+            {next_state, StateName, State#state{players=NewPlayers}}
     end.
 
 handle_join(Name, From, #state{players=Players}=State) ->
     case length(Players)<?MAX_PLAYERS of
         true ->
-            Reply = {ok,ok},
-            Player = #player{name=Name,pid=From,role=player},
-            NewState = State#state{players=[Player|Players]},
-            {Reply, NewState};
+            case user_exists(From, Players) of
+                false ->
+                    NewPlayers = [#player{name=Name,
+                                          pid=From,
+                                          role=player} | Players],
+                    Reply = {ok,player_names(NewPlayers)},
+                    erlang:monitor(process, From),
+                    broadcast({join, Name}, State),
+                    {Reply, State#state{players=NewPlayers}};
+                true ->
+                    {{error, <<"User already there">>}, State}
+            end;
         false ->
             Reply = {error, <<"Room is full">>},
             {Reply, State}
     end.     
 
-handle_start(Pid, #state{players=Players}) ->
+handle_start(Pid, #state{players=Players}=State) ->
     case length(Players)>1 of
         true ->
             case is_owner(Pid, Players) of
                 true ->
-                    send_start_to_players(Players),
+                    erlang:send_after(5000, self(), timeout),
+                    broadcast(start, State),
                     {ok, countdown};
                 false ->
                     {error, <<"Player is not a table owner">>}
@@ -121,10 +141,6 @@ handle_start(Pid, #state{players=Players}) ->
         false ->
             {error, <<"Not enough players">>}
     end.
-
-send_start_to_players(Players) ->
-    [Pid ! start || #player{pid=Pid} <- Players],
-    erlang:send_after(5000, self(), timeout).
 
 start_game(State=#state{players=Players}) ->
     Deck = rummy_deck:shuffle(),
@@ -142,3 +158,15 @@ is_owner(Pid, Players) ->
         #player{role=owner} -> true;
         _                   -> false
     end.
+
+user_exists(Pid, Players) ->
+    case lists:keyfind(Pid, #player.pid, Players) of
+        #player{} -> true;
+        _         -> false
+    end.
+
+broadcast(Message, #state{players=Players}) ->
+    [Pid ! {room, Message} || #player{pid=Pid} <- Players].
+
+player_names(Players) ->
+    [Name || #player{name=Name} <- Players].

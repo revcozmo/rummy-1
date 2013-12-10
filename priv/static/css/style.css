@@ -7,6 +7,34 @@ body {
     display: none;
 }
 
+div.tile {
+    width: 50px;
+    height: 60px;
+    border-style: solid;
+    border-width: 2px;
+    font-size: 32px;
+    font-weight: bold;
+    float: left;
+    text-align: center;
+}
+
+div.black {
+    color: #000000;
+}
+
+div.orange {
+    color: #ffa500;
+}
+
+div.blue {
+    color: #0000ff;
+}
+
+div.red {
+    color: #ff0000;
+}
+
+
 .form-signin {
   max-width: 330px;
   padding: 15px;

@@ -2,7 +2,11 @@ $(document).ready(function() {
     var url = 'ws://'+window.location.hostname+':'+window.location.port+'/rummy';
     var conn = $.bert(url);
     var lobbyUsers = [];
+    var roomUsers = [];
     var rooms = [];
+    var username;
+    var room;
+    
     var call = function(term) {
         return conn.call(term).then(function(reply) {
             if(reply[0].value == 'error') {
@@ -23,6 +27,7 @@ $(document).ready(function() {
     }
     
     var lobbyMessage = function(data) {
+        console.log(data);
       if(data.length == 2) {
           if(data[0].value == 'add_user') {
               lobbyUsers.push(data[1]);
@@ -62,13 +67,60 @@ $(document).ready(function() {
                   $(selector).removeClass("success"); 
               });
           }
+          else if(data[0].value == 'join') {
+              rooms = rooms.map(function(r) {
+                  if(r.id.value == data[1].value) {
+                      r.members.push(data[2]);
+                  }
+                  return r;
+              });
+              $("#rooms-list").trigger('render', [rooms]);
+              
+          }
+          else if(data[0].value == 'exit') {
+              rooms = rooms.map(function(r) {
+                  if(r.id.value == data[1].value) {
+                      r.members = r.members.filter(function(m) { return m.value != data[2].value });
+                  }
+                  return r;
+              });
+              $("#rooms-list").trigger('render', [rooms]);
+              console.log(rooms);
+          }
       }
+    };
+    
+    var roomMessage = function(data) {
+        console.log(data);
+        if(data.length == 2) {
+            if(data[0].value == 'join') {
+                roomUsers.push(data[1]);
+                $("#room-players-list").trigger('render', [roomUsers]);
+                var selector = "#room-players-list tr."+data[1].value;
+                  $(selector).addClass("success");
+                  Q.delay(2000).then(function() {
+                      $(selector).removeClass("success"); 
+                  });
+            }
+            else if(data[0].value == 'exit') {
+                var selector = "#room-players-list tr."+data[1].value;
+                $(selector).addClass("danger");
+                Q.delay(2000).then(function() {
+                    $(selector).removeClass("danger"); 
+                    roomUsers = roomUsers.filter(function(u) { return u.value != data[1].value; });
+                    $("#room-players-list").trigger('render', [roomUsers]);
+                });
+            }
+        }
     };
     
     conn.onmessage = function(data) {
       var namespace = data[0];
       if(data[0].value == 'lobby') {
           lobbyMessage(data[1]);
+      }
+      else if(data[0].value == 'room') {
+          roomMessage(data[1]);
       }
     };
     
@@ -108,6 +160,16 @@ $(document).ready(function() {
                    '</td></tr>';
                }).join('');
                $(this).html(rows);
+               rooms.forEach(function(r) {
+                   var selector = "#rooms-list tr."+r.id.value;
+                   $(selector).click(function() {
+                       call(Bert.tuple(Bert.atom('join_room'), r.id)).then(function(members) {
+                           room = r.id;
+                           roomUsers = members;
+                           return loadTable();
+                       });
+                   })
+               });
             });
         })
         .then(function() {
@@ -123,7 +185,9 @@ $(document).ready(function() {
             });
             $("#create-room").click(function() {
                call(Bert.atom('create_room')).then(function(data) {
-                  console.log(data); 
+                   room = data[1];
+                   roomUsers = [username];
+                   loadTable();
                });
             });
         })
@@ -133,7 +197,6 @@ $(document).ready(function() {
         .then(function(tables) {
             rooms = tables;
             $("#rooms-list").trigger('render', [rooms]);
-            console.log(rooms);
         });
     };
     
@@ -142,6 +205,7 @@ $(document).ready(function() {
             $("#form-signin").submit(function(event) {
                 var join = Bert.atom('join');
                 var user = Bert.binary($("#form-signin-nickname").val());
+                username = user;
                 call(Bert.tuple(join, user))
                 .then(function(reply) {
                     return loadLobby();
@@ -150,6 +214,29 @@ $(document).ready(function() {
             });
         });
     };
+    
+    var loadTable = function() {
+        return loadTemplate('table').then(function() {
+           $("#quit").click(function() {
+              call(Bert.atom('quit_room')).then(function() {
+                  roomUsers = [];
+                  return loadLobby();
+              })
+           });
+        })
+        .then(function() {
+            $("#room-players-list").bind('render', function(event, users) {
+                var rows = users.map(function(u) {
+                    return '<tr class="'+u.value+'"><td>' + u.value + '</td></tr>'
+                    }).join('');
+                $(this).html(rows);
+            });
+        })
+        .then(function() {
+            console.log(roomUsers);
+            $("#room-players-list").trigger('render', [roomUsers]);
+        });
+    }
     
     loadLogin();
 

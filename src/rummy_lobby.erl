@@ -9,6 +9,7 @@
          users/0,
          rooms/0,
          create_room/0,
+         exit_room/2,
          join_room/1]).
 
 %% gen_server callbacks
@@ -46,7 +47,10 @@ create_room() ->
 join_room(Id) ->
     gen_server:call(?MODULE, {join_room, Id}).
 
-%%%===================================================================
+exit_room(Id, Username) ->
+    gen_server:cast(?MODULE, {exit_room, Id, Username}).
+
+%%%==================================================================
 %%% gen_server callbacks
 %%%===================================================================
 
@@ -75,6 +79,16 @@ handle_call(_Request, _From, State) ->
     Reply = ok,
     {reply, Reply, State}.
 
+handle_cast({exit_room, Id, Username}, #state{rooms=Rooms}=State) ->
+    broadcast({exit, Id, Username}, State),
+    NewRooms = case lists:keyfind(Id, #room.id, Rooms) of
+        #room{members=Members}=Room ->
+            NewMembers = Members -- [Username],
+            lists:keystore(Id, #room.id, Rooms, Room#room{members=NewMembers});
+        _ ->
+            Rooms
+    end,
+    {noreply, State#state{rooms=NewRooms}};
 handle_cast(_Msg, State) ->
     {noreply, State}.
 
@@ -110,13 +124,18 @@ handle_logout(Pid, #state{users=Users, rooms=Rooms}=State) ->
     case lists:keyfind(Pid, 2, Users) of
         {Username, Pid} ->
             error_logger:info_msg("User ~p logged out.", [Username]),
-            broadcast({delete_user, Username}, State),
             NewUsers = lists:keydelete(Pid, 2, Users),
             NewRooms = case lists:keyfind(Pid, #room.owner, Rooms) of
                 #room{id=Id} -> delete_room(Id, State);
                 _            -> Rooms
             end,
-            {{ok,ok}, State#state{users=NewUsers, rooms=NewRooms}};
+            [gen_fsm:send_all_state_event(RoomPid, {exit_room, Pid}) ||
+                #room{pid=RoomPid} <- NewRooms],
+            NewRooms1 = lists:map(fun(#room{members=Members}=Room) ->
+                            Room#room{members=Members--[Username]}
+                    end, NewRooms),
+            broadcast({delete_user, Username}, State),
+            {{ok,ok}, State#state{users=NewUsers, rooms=NewRooms1}};
         _ ->
             {{error, <<"No such user">>}, State}
     end.
@@ -128,17 +147,17 @@ handle_rooms(#state{rooms=Rooms}) ->
 handle_create_room(Pid, State=#state{users=Users, rooms=Rooms}) ->
     case lists:keyfind(Pid, 2, Users) of
         {Username, Pid} ->
-            {ok, TablePid} = supervisor:start_child(rummy_table_sup,
-                                                    [Username, Pid]),
-            erlang:monitor(process, TablePid),
             Id = list_to_binary(uuid:to_string(uuid:v4())),
+            {ok, TablePid} = supervisor:start_child(rummy_table_sup,
+                                                    [Id, Username, Pid]),
+            erlang:monitor(process, TablePid),
             NewRooms = [#room{id=Id,
                               pid=TablePid,
                               owner=Pid,
                               members=[Username]} | Rooms],
             broadcast({create_room, Id, [Username]}, State),
             error_logger:info_msg("New room ~p created by ~p", [Id, Username]),
-            {{ok, Id}, State#state{rooms=NewRooms}};
+            {{ok, TablePid, Id}, State#state{rooms=NewRooms}};
         _ ->
             {{error, <<"No such user">>}, State}
     end.
@@ -146,26 +165,28 @@ handle_create_room(Pid, State=#state{users=Users, rooms=Rooms}) ->
 handle_join_room(Id, Pid, State=#state{users=Users}) ->
     case lists:keyfind(Pid, 2, Users) of
         {Username, Pid} ->
-            handle_join_room1(Id, Username, State);
+            handle_join_room1(Id, Username, Pid, State);
         _ ->
             {{error, <<"No such user">>}, State}
     end.
 
-handle_join_room1(Id, Username, State=#state{rooms=Rooms}) ->
+handle_join_room1(Id, Username, Pid, State=#state{rooms=Rooms}) ->
     case lists:keyfind(Id, #room.id, Rooms) of
         #room{id=Id}=Room ->
-            handle_join_room2(Room, Username, State);
+            handle_join_room2(Room, Username, Pid, State);
         _ ->
             {{error, <<"No such room">>}, State}
     end.
 
-handle_join_room2(#room{pid=Pid,members=Members}=Room,
-                  Username, State=#state{rooms=Rooms}) ->
-    case gen_fsm:sync_send_event(Pid, {join, Username}) of
-        {ok, ok} ->
+handle_join_room2(#room{pid=Pid,id=Id,members=Members}=Room,
+                  Username, UserPid, State=#state{rooms=Rooms}) ->
+    case gen_fsm:sync_send_event(Pid, {join, Username, UserPid}) of
+        {ok, NewMembers} ->
             NewRoom = Room#room{members=[Username|Members]},
             NewRooms = lists:keystore(Pid, #room.pid, Rooms, NewRoom),
-            {{ok,ok}, State#state{rooms = NewRooms}};
+            error_logger:info_msg("User ~p joined room ~p", [Username, Id]),
+            broadcast({join, Id, Username}, State),
+            {{ok,Pid,NewMembers}, State#state{rooms = NewRooms}};
         Other ->
             {Other, State}
     end.
