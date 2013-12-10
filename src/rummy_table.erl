@@ -3,7 +3,7 @@
 -behaviour(gen_fsm).
 
 %% API
--export([start_link/1]).
+-export([start_link/2]).
 
 %% gen_fsm callbacks
 -export([init/1,
@@ -30,16 +30,17 @@
 %%%===================================================================
 %%% API
 %%%===================================================================
-start_link(Name) ->
-    gen_fsm:start_link(?MODULE, [Name], []).
+start_link(Name, Pid) ->
+    gen_fsm:start_link(?MODULE, [Name, Pid], []).
 
 %%%===================================================================
 %%% gen_fsm callbacks
 %%%===================================================================
-init([Name]) ->
+init([Name, Pid]) ->
     State = #state{players = [#player{name=Name,
-                                      pid=self(),
+                                      pid=Pid,
                                       role=owner}]},
+    erlang:monitor(process, Pid),
     {ok, initial, State}.
 
 initial(_Event, State) ->
@@ -72,6 +73,8 @@ handle_sync_event(_Event, _From, StateName, State) ->
 handle_info(timeout, countdown, State=#state{limit=Limit}) ->
     NewState = start_game(State),
     {next_state, play, NewState, Limit};
+handle_info({'DOWN', _, _, Pid, _}, StateName, State) ->
+    handle_down(Pid, StateName, State);
 handle_info(_Info, StateName, State) ->
     {next_state, StateName, State}.
 
@@ -84,6 +87,15 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%=================================================================== 
+handle_down(Pid, StateName, #state{players=Players}=State) ->
+    case is_owner(Pid, Players) of
+        true ->
+            {stop, <<"Owner exited">>, State};
+        false ->
+            %% todo
+            {next_state, StateName, State}
+    end.
+
 handle_join(Name, From, #state{players=Players}=State) ->
     case length(Players)<?MAX_PLAYERS of
         true ->
@@ -99,11 +111,11 @@ handle_join(Name, From, #state{players=Players}=State) ->
 handle_start(Pid, #state{players=Players}) ->
     case length(Players)>1 of
         true ->
-            case lists:keyfind(Pid, 3, Players) of
-                #player{role=owner} ->
+            case is_owner(Pid, Players) of
+                true ->
                     send_start_to_players(Players),
                     {ok, countdown};
-                _ ->
+                false ->
                     {error, <<"Player is not a table owner">>}
             end;
         false ->
@@ -124,3 +136,9 @@ deal_tiles(Deck, [], Players) ->
 deal_tiles(Deck, [Player|Rest], Players) ->
     {Tiles, DeckRest} = lists:split(14, Deck),
     deal_tiles(DeckRest, Rest, [Player#player{tiles=Tiles}|Players]).
+
+is_owner(Pid, Players) ->
+    case lists:keyfind(Pid, #player.pid, Players) of
+        #player{role=owner} -> true;
+        _                   -> false
+    end.

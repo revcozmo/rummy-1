@@ -16,10 +16,14 @@ init([]) ->
 
 handle_call({join, Username}, State) ->
     {reply, rummy_lobby:join(Username), State};
+handle_call(logout, State) ->
+    {reply, rummy_lobby:logout(), State};
 handle_call(get_rooms, State) ->
     {reply, rummy_lobby:rooms(), State};
 handle_call(get_users, State) ->
     {reply, rummy_lobby:users(), State};
+handle_call(create_room, State) ->
+    {reply, rummy_lobby:create_room(), State};
 handle_call(_Request, State) ->
     {reply, ok, State}.
 

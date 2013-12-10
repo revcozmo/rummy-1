@@ -2,11 +2,22 @@
     <div class="col-md-9">
         <table class="table table-hover">
             <thead>
-                <tr><th colspan="4">Tables (click to join)</th></tr>
-            </thead>            
+                <tr><th>Tables (click to join)</th></tr>
+            </thead>
+            <tbody id="rooms-list"/>         
         </table>
     </div>
     <div class="col-md-3">
+        <div class="btn-group">
+          <button type="button" class="btn btn-default" id="create-room">
+              <span class="glyphicon glyphicon-new-window"></span>
+              Create room
+          </button>
+          <button type="button" class="btn btn-default" id="logout">
+              <span class="glyphicon glyphicon-log-out"></span>
+              Logout
+          </button>
+        </div>
         <table class="table table-hover">
             <thead>
                 <tr><th>Players</th></tr>
