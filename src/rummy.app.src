@@ -1,0 +1,12 @@
+{application, rummy,
+ [
+  {description, ""},
+  {vsn, "1"},
+  {registered, []},
+  {applications, [
+                  kernel,
+                  stdlib
+                 ]},
+  {mod, { rummy_app, []}},
+  {env, []}
+ ]}.
