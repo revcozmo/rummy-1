@@ -1,3 +1,82 @@
+var sets = [];
+var backupSets = [];
+var backupTiles = [];
+var tiles = [];
+
+var allowDrop = function (ev)
+{
+    ev.preventDefault();
+}
+
+var idx = function(v) {
+    return v.split(" ")[2].split("-")[1];
+}
+
+var drag = function(ev)
+{
+    ev.dataTransfer.setData("source",ev.target.className);
+    if(ev.target.parentElement.className.indexOf("set")==0) {
+         ev.dataTransfer.setData("set", idx(ev.target.parentElement.className));  
+    }
+}
+
+var drop = function(ev)
+{   
+    var source=ev.dataTransfer.getData("source");
+    var destination=ev.target.className;
+    var from = idx(source);
+    var to = idx(destination); 
+    var fromObj = tiles[from];
+    tiles.splice(from, 1);
+    tiles.splice(to, 0, fromObj);
+    $("#tiles").trigger('render', [tiles]);
+    ev.preventDefault();
+}
+
+var dropNew = function(ev) {
+    var source=ev.dataTransfer.getData("source");
+    var from = idx(source);
+    if(ev.dataTransfer.getData("set")) {
+        var set = sets[ev.dataTransfer.getData("set")];
+        var fromObj = set[from];
+        set.splice(from, 1);
+        sets.splice(0, 0, [fromObj]);
+        if(set.length == 0) {
+            sets.splice(ev.dataTransfer.getData("set")+1, 1);
+        }
+    }
+    else {
+        var fromObj = tiles[from];
+        tiles.splice(from, 1);
+        sets.splice(0, 0, [fromObj]);   
+    }
+    $("#tiles").trigger('render', [tiles]);
+    $("#sets").trigger('render', [sets]);
+}
+
+var dropExisting = function(ev) {
+    var source = ev.dataTransfer.getData("source");
+    var destination = ev.target.className;
+    var from = idx(source);
+    var to = idx(destination);
+    if(ev.dataTransfer.getData("set")) {
+        var set = sets[ev.dataTransfer.getData("set")];
+        var fromObj = set[from];
+        set.splice(from, 1);
+        sets[idx(ev.target.parentElement.className)].splice(to+1, 0, fromObj);
+        if(set.length == 0) {
+            sets.splice(ev.dataTransfer.getData("set"), 1);
+        }
+    }
+    else {
+        var fromObj = tiles[from];
+        tiles.splice(from, 1);
+        sets[idx(ev.target.parentElement.className)].splice(to+1, 0, fromObj);
+    }
+    $("#tiles").trigger('render', [tiles]);
+    $("#sets").trigger('render', [sets]); 
+}
+
 $(document).ready(function() {
     var url = 'ws://'+window.location.hostname+':'+window.location.port+'/rummy';
     var conn = $.bert(url);
@@ -6,6 +85,9 @@ $(document).ready(function() {
     var rooms = [];
     var username;
     var room;
+    var timer;
+    var currentUser;
+    var interval;
     
     var call = function(term) {
         return conn.call(term).then(function(reply) {
@@ -27,7 +109,7 @@ $(document).ready(function() {
     }
     
     var lobbyMessage = function(data) {
-        console.log(data);
+        //console.log(data);
       if(data.length == 2) {
           if(data[0].value == 'add_user') {
               lobbyUsers.push(data[1]);
@@ -85,14 +167,17 @@ $(document).ready(function() {
                   return r;
               });
               $("#rooms-list").trigger('render', [rooms]);
-              console.log(rooms);
+              //console.log(rooms);
           }
       }
     };
     
     var roomMessage = function(data) {
-        console.log(data);
-        if(data.length == 2) {
+        //console.log(data);
+        if(data.value && data.value == 'exit') {
+            return loadLobby();
+        }
+        else if(data.length == 2) {
             if(data[0].value == 'join') {
                 roomUsers.push(data[1]);
                 $("#room-players-list").trigger('render', [roomUsers]);
@@ -110,6 +195,57 @@ $(document).ready(function() {
                     roomUsers = roomUsers.filter(function(u) { return u.value != data[1].value; });
                     $("#room-players-list").trigger('render', [roomUsers]);
                 });
+            }
+            else if(data[0].value == 'ready') {
+                var selector = "#room-players-list tr."+data[1].value +" td.time";
+                $(selector).html("READY");
+            }
+            else if(data[0].value == 'start') {
+                tiles = data[1];
+                backupTiles = tiles.map(function(r) { return r; });
+                $("#tiles").trigger('render', [tiles]);
+                $("#room-players-list td.time").html("");
+            }
+            else if(data[0].value == 'tile') {
+                tiles.push(data[1]);
+                backupTiles = tiles.map(function(r) { return r; });
+                $("#sets").trigger('render', [sets]);
+                $("#tiles").trigger('render', [tiles]);
+            }
+            else if(data[0].value == 'move') {
+                $("#room-players-list td.time").html("");
+                var selector = "#room-players-list tr."+data[1].value +" td.time";
+                var oldUser = currentUser;
+                currentUser = data[1];
+                timer = 60;
+                $(selector).html(timer);
+                clearInterval(interval);
+                interval = setInterval(function() {
+                    timer--;
+                    $(selector).html(timer);
+                }, 1000);
+                if(oldUser && oldUser.value != username.value) {
+                    sets = backupSets.map(function(r) { return r.slice(0); });
+                    tiles = backupTiles.map(function(r) { return r; });
+                }
+                $("#tiles").trigger('render', [tiles]);
+                $("#sets").trigger('render', [sets]);
+            }
+            else if(data[0].value == 'set') {
+                sets = data[1];
+                backupSets = [];
+                for(var i in sets) {
+                    backupSets.push(sets[i].slice(0));
+                }
+                $("#tiles").trigger('render', [tiles]);
+                $("#sets").trigger('render', [sets]);
+            }
+            else if(data[0].value == 'winner') {
+                $("#alert").text(data[1].value + 'HAS WON THE GAME!');
+                $("#alert").show();
+                Q.delay(5000).then(function() {
+                    $("#alert").hide();
+                })
             }
         }
     };
@@ -141,7 +277,7 @@ $(document).ready(function() {
     var loadLobby = function() {
         return loadTemplate('lobby')
         .then(function() {
-            $("#players-list").bind('render', function(event, users) {
+            $("#players-list").unbind('render').bind('render', function(event, users) {
                 var rows = users.map(function(u) {
                         return '<tr class="'+u.value+'"><td>' + u.value + '</td></tr>'
                     }).join('');
@@ -149,7 +285,7 @@ $(document).ready(function() {
             });
         })
         .then(function() {
-            $("#rooms-list").bind('render', function(event, rooms) {
+            $("#rooms-list").unbind('render').bind('render', function(event, rooms) {
                var rows = rooms.map(function(r) {
                    var members = r.members.map(function(m) {
                        return '<button type="button" class="btn btn-default">'+m.value+'</button>';
@@ -162,7 +298,7 @@ $(document).ready(function() {
                $(this).html(rows);
                rooms.forEach(function(r) {
                    var selector = "#rooms-list tr."+r.id.value;
-                   $(selector).click(function() {
+                   $(selector).unbind('click').click(function() {
                        call(Bert.tuple(Bert.atom('join_room'), r.id)).then(function(members) {
                            room = r.id;
                            roomUsers = members;
@@ -178,12 +314,12 @@ $(document).ready(function() {
         .then(function(users) {
             lobbyUsers = users;
             $("#players-list").trigger('render', [users]);
-            $("#logout").click(function() {
+            $("#logout").unbind('click').click(function() {
                call(Bert.atom('logout')).then(function() {
                   return loadLogin(); 
                });
             });
-            $("#create-room").click(function() {
+            $("#create-room").unbind('click').click(function() {
                call(Bert.atom('create_room')).then(function(data) {
                    room = data[1];
                    roomUsers = [username];
@@ -217,7 +353,7 @@ $(document).ready(function() {
     
     var loadTable = function() {
         return loadTemplate('table').then(function() {
-           $("#quit").click(function() {
+           $("#quit").unbind('click').click(function() {
               call(Bert.atom('quit_room')).then(function() {
                   roomUsers = [];
                   return loadLobby();
@@ -225,19 +361,84 @@ $(document).ready(function() {
            });
         })
         .then(function() {
-            $("#room-players-list").bind('render', function(event, users) {
+            $("#room-players-list").unbind('render').bind('render', function(event, users) {
                 var rows = users.map(function(u) {
-                    return '<tr class="'+u.value+'"><td>' + u.value + '</td></tr>'
+                    return '<tr class="'+u.value+'"><td>' + u.value + '</td><td class="time"></td></tr>'
                     }).join('');
                 $(this).html(rows);
             });
         })
         .then(function() {
-            console.log(roomUsers);
+            $("#tiles").unbind('render').bind('render', function(event, tiles) {
+                var index = 0;
+                var tiles = tiles.map(function(t) {
+                    return '<div class="tile '+t.color+' idx-'+(index++)+'">'+t.number+'</div>';
+                }).join('');
+                $(this).html(tiles);
+                $("#tiles div").attr("draggable", true)
+                                .attr("ondragover", "allowDrop(event)")
+                                .attr("ondrop","drop(event)")
+                                .attr("ondragstart", "drag(event)");
+            });
+        })
+        .then(function() {
+            $("#sets").unbind('render').bind('render', function(event, localsets) {
+                var i = 0;
+ 
+                var localsets = localsets.map(function(s) {
+                    var idx = 0;
+                    return '<div class="set dummy set-'+(i++)+'">' +
+                    s.map(function(t) {
+                        return '<div class="tile '+t.color+' idx-'+(idx++)+'">'+t.number+'</div>';
+                        }).join('') +
+                        '</div>';
+                    }).join('');
+                    $(this).html('<div class="set set-new">NEW SET</div>'+localsets);
+                    if(currentUser && currentUser.value == username.value) {
+                        $("#sets div.tile").attr("draggable", true)
+                        .attr("ondragover", "allowDrop(event)")
+                        .attr("ondrop","dropExisting(event)")
+                        .attr("ondragstart", "drag(event)");
+                        $("div.set-new").attr("ondragover", "allowDrop(event)")
+                        .attr("ondrop","dropNew(event)");
+                    }
+                    else {
+                        $("#sets div.tile").removeAttr("draggable")
+                        .removeAttr("ondragover")
+                        .removeAttr("ondrop")
+                        .removeAttr("ondragstart");
+                        $("div.set-new").removeAttr("ondragover")
+                        .removeAttr("ondrop");      
+                    }
+                });
+        })
+        .then(function() {
             $("#room-players-list").trigger('render', [roomUsers]);
-        });
+            $("#sets").trigger('render', [sets]);
+            $("#ready").unbind('click').click(function() {
+               call(Bert.atom('start')); 
+            });
+            $("#peek").unbind('click').click(function() {
+                call(Bert.atom('peek'));
+            });
+            $("#send").unbind('click').click(function() {
+                call(Bert.tuple(Bert.atom('put'), sets)).then(function() {
+                    backupTiles = tiles.map(function(r) { return r; });
+                });
+            });
+            $("#reset").unbind('click').click(function() {
+                sets = backupSets.map(function(r) { return r.slice(0); });
+                tiles = backupTiles.map(function(r) { return r; });
+                $("#tiles").trigger('render', [tiles]);
+                $("#sets").trigger('render', [sets]);
+            });
+        }).
+        then(function() {
+            sets = [];
+            backupSets = [];
+            clearInterval(interval);
+        })
     }
     
     loadLogin();
-
 });

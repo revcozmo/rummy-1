@@ -7,15 +7,27 @@ body {
     display: none;
 }
 
+div#tiles {
+    display:block;
+    height: 150px;
+}
+
 div.tile {
-    width: 50px;
-    height: 60px;
+    width: 30px;
+    height: 40px;
     border-style: solid;
     border-width: 2px;
-    font-size: 32px;
+    font-size: 20px;
     font-weight: bold;
     float: left;
     text-align: center;
+}
+
+div.set {
+    height: 40px;
+    margin-bottom: 10px;
+    font-size: 22px;
+    font-weight: bold;
 }
 
 div.black {

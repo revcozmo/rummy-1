@@ -30,6 +30,15 @@ handle_call({join_room, Id}, State) ->
 handle_call(quit_room, #state{id=Id, pid=Pid, username=Username}=State) ->
     exit_room(Username, Id, Pid),
     {reply, {ok,ok}, State#state{id=undefined,pid=undefined}};
+handle_call(start, #state{pid=Pid}=State) ->
+    Reply = gen_fsm:sync_send_event(Pid, start),
+    {reply, Reply, State};
+handle_call(peek, #state{pid=Pid}=State) ->
+    gen_fsm:sync_send_event(Pid, peek),
+    {reply, {ok,ok}, State};
+handle_call({put, List}, #state{pid=Pid}=State) ->
+    Reply = gen_fsm:sync_send_event(Pid, {put, List}),
+    {reply, Reply, State};
 handle_call(_Request, State) ->
     {reply, ok, State}.
 

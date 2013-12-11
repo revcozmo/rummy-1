@@ -9,6 +9,8 @@
 -export([init/1,
          initial/2,
          initial/3,
+         countdown/2,
+         countdown/3,
          play/2,
          play/3,
          handle_event/3,
@@ -17,7 +19,7 @@
          terminate/3,
          code_change/4]).
 
--record(player, {name, pid, role, tiles = []}).
+-record(player, {name, pid, role, tiles = [], ready, initial=false}).
 -record(state, {id,
                 limit = 60000,
                 players=[],
@@ -40,6 +42,7 @@ start_link(Id, Name, Pid) ->
 init([Id, Name, Pid]) ->
     State = #state{id = Id, players = [#player{name=Name,
                                                pid=Pid,
+                                               ready=false,
                                                role=owner}]},
     erlang:monitor(process, Pid),
     {ok, initial, State}.
@@ -51,18 +54,29 @@ initial({join, User, Pid}, _From, State) ->
     {Reply, NewState} = handle_join(User, Pid, State),
     {reply, Reply, initial, NewState};
 initial(start, {Pid,_}, State) ->
-    {Reply, NewStateName} = handle_start(Pid, State),
-    {reply, Reply, NewStateName, State};
+    {NewStateName, NewState} = handle_start(Pid, State),
+    {reply, {ok,ok}, NewStateName, NewState};
 initial(_Event, _From, State) ->
     {reply, ok, initial, State}.
 
-play(timeout, State=#state{queue=[Player|_]}) ->
-    {next_state, play, State}.
+countdown(_Event, State) ->
+    {next_state, countdown, State}.
 
-play(peek, {Pid,_}, State) ->
-    {reply, ok, play, State};
-play({put, List}, {Pid,_}, State) ->
-    {reply, ok, play, State}.
+countdown(_Event, _From, State) ->
+    {reply, ok, countdown, State}.
+
+play(timeout, State=#state{limit=Limit}) ->
+    NewState = peek(undefined, State),
+    {next_state, play, NewState, Limit}.
+
+play(peek, {Pid,_}, State=#state{limit=Limit}) ->
+    NewState = peek(Pid, State),
+    {reply, ok, play, NewState, Limit};
+play({put, List}, {Pid,_}, State=#state{limit=Limit}) ->
+    {Reply, NewStateName, NewState} = put(Pid, List, State),
+    {reply, Reply, NewStateName, NewState, Limit};
+play(_, _, State) ->
+    {reply, {error, <<"Already in play">>}, play, State}.
 
 handle_event({exit_room, Pid}, StateName, State) ->
     handle_down(Pid, StateName, State);
@@ -73,9 +87,9 @@ handle_sync_event(_Event, _From, StateName, State) ->
     Reply = ok,
     {reply, Reply, StateName, State}.
 
-handle_info(timeout, countdown, State=#state{limit=Limit}) ->
-    NewState = start_game(State),
-    {next_state, play, NewState, Limit};
+handle_info(timeout, countdown, State=#state{queue=[Player|_],limit=Limit}) ->
+    broadcast({move, Player#player.name}, State),
+    {next_state, play, State, Limit};
 handle_info({'DOWN', _, _, Pid, _}, StateName, State) ->
     handle_down(Pid, StateName, State);
 handle_info(_Info, StateName, State) ->
@@ -90,11 +104,68 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%===================================================================
 %%% Internal functions
 %%%=================================================================== 
+put(Pid1, _, #state{queue=[#player{pid=Pid2}|_]}=State) when Pid1 =/= Pid2 ->
+    {{error, <<"Not your turn">>}, play, State};
+put(_Pid, List, #state{queue=[Player|_]=Queue, sets=OldSets}=State) ->
+    NewSets = proplist_to_tiles(List), 
+    case is_play_legal(NewSets, OldSets, Player) of
+        false ->
+            {{error, <<"Illegal play">>}, play, State};
+        {true, NewPlayer} ->
+            broadcast({set, List}, State),
+            NewQueue = lists:keystore(Player#player.name, #player.name, Queue, NewPlayer),
+            NewState = rotate_queue(State#state{queue=NewQueue}),
+            NewState1 = NewState#state{sets=NewSets},
+            case NewPlayer#player.tiles of
+                [] ->
+                    broadcast({winner, NewPlayer#player.name}, State),
+                    {{ok,ok}, initial, NewState1};
+                _ ->
+                    {{ok,ok}, play, NewState1}
+            end
+    end. 
+
+is_play_legal(NewSets, OldSets, #player{tiles=Tiles, initial=Initial}=Player) ->
+    DiffSets = lists:flatten(NewSets) -- lists:flatten(OldSets),
+    DiffTiles = Tiles -- DiffSets,
+    Sum = lists:foldl(fun(#card{number=N},Acc) -> N+Acc end, 0, DiffSets),
+    case (not Initial andalso Sum < 30) of
+        true ->
+            false;
+        _ ->
+            case rummy_deck:is_correct(NewSets)
+                andalso length(DiffSets) > 0
+                andalso length(DiffTiles) =:= length(Tiles)-length(DiffSets) of
+                true ->
+                    {true, Player#player{tiles=DiffTiles, initial=true}};
+                false ->
+                    false
+            end
+    end.
+
+peek(_, #state{bank=[]}=State) ->
+    rotate_queue(State);
+peek(Pid1, #state{queue=[#player{pid=Pid2}|_]}=State) when Pid1 =/= Pid2, is_pid(Pid1) ->
+    %% ignore, not this guy's turn
+    State; 
+peek(_, #state{queue=[Player|_]=Queue, bank=[Tile|Bank]}=State) ->
+    #player{pid=Pid, name=Name, tiles=Tiles} = Player,
+    Pid ! {room, {tile, tiles_to_proplist(Tile)}},
+    NewTiles = [Tile|Tiles],
+    NewQueue = lists:keystore(Name, #player.name, Queue,
+                              Player#player{tiles=NewTiles}),
+    rotate_queue(State#state{queue=NewQueue, bank=Bank}).
+
+rotate_queue(#state{queue=[Player,Next|Queue]}=State) ->
+    NewQueue = [Next|Queue] ++ [Player],
+    broadcast({move, Next#player.name}, State),
+    State#state{queue=NewQueue}.
+
 handle_down(Pid, StateName, #state{players=Players, id=Id}=State) ->
     case is_owner(Pid, Players) of
         true ->
             broadcast(exit, State),
-            {stop, normal, State};
+            {stop, shutdown, State};
         false ->
             NewPlayers = case lists:keyfind(Pid, #player.pid, Players) of
                 #player{name=Username} ->
@@ -114,6 +185,7 @@ handle_join(Name, From, #state{players=Players}=State) ->
                 false ->
                     NewPlayers = [#player{name=Name,
                                           pid=From,
+                                          ready=false,
                                           role=player} | Players],
                     Reply = {ok,player_names(NewPlayers)},
                     erlang:monitor(process, From),
@@ -128,24 +200,27 @@ handle_join(Name, From, #state{players=Players}=State) ->
     end.     
 
 handle_start(Pid, #state{players=Players}=State) ->
-    case length(Players)>1 of
+    Player = lists:keyfind(Pid, #player.pid, Players),
+    NewPlayers = lists:keystore(Pid, #player.pid, Players, Player#player{ready=true}),
+    broadcast({ready, Player#player.name}, State),
+    error_logger:info_msg("User ~p ready", [Player]),
+    Length = length(Players),
+    case (length(ready_players(NewPlayers)) =:= Length andalso Length>1) of
         true ->
-            case is_owner(Pid, Players) of
-                true ->
-                    erlang:send_after(5000, self(), timeout),
-                    broadcast(start, State),
-                    {ok, countdown};
-                false ->
-                    {error, <<"Player is not a table owner">>}
-            end;
-        false ->
-            {error, <<"Not enough players">>}
+            erlang:send_after(5000, self(), timeout),
+            NewState = start_game(State),
+            send_tiles(NewState),
+            error_logger:info_msg("All players ready, starting"),
+            {countdown, NewState#state{players=NewPlayers}};
+        _ ->
+            {initial, State#state{players=NewPlayers}}
     end.
 
 start_game(State=#state{players=Players}) ->
     Deck = rummy_deck:shuffle(),
     {NewPlayers, Bank} = deal_tiles(Deck, Players, []),
-    State#state{players=NewPlayers, bank=Bank}.
+    NewPlayers1 = [Player#player{initial=false} || Player <- NewPlayers],
+    State#state{players=NewPlayers1, bank=Bank, queue=NewPlayers, sets=[]}.
 
 deal_tiles(Deck, [], Players) ->
     {lists:reverse(Players), Deck};
@@ -170,3 +245,25 @@ broadcast(Message, #state{players=Players}) ->
 
 player_names(Players) ->
     [Name || #player{name=Name} <- Players].
+
+ready_players(Players) ->
+    lists:filter(fun
+            (#player{ready=true}) -> true;
+            (_)                   -> false
+        end, Players).
+
+send_tiles(#state{players=Players}) ->
+    [Pid ! {room, {start, tiles_to_proplist(Tiles)}} ||
+        #player{pid=Pid, tiles=Tiles} <- Players]. 
+
+proplist_to_tiles([{_,_}|_]=Proplist) ->
+    {color, Color} = lists:keyfind(color, 1, Proplist),
+    {number, Number} = lists:keyfind(number, 1, Proplist),
+    #card{color = Color, number = Number};
+proplist_to_tiles(List) when is_list(List) ->
+    [proplist_to_tiles(Proplist) || Proplist <- List].
+
+tiles_to_proplist(List) when is_list(List) ->
+    [tiles_to_proplist(Tile) || Tile <- List];
+tiles_to_proplist(#card{color=Color, number=Number}) ->
+    [{color, Color}, {number, Number}].
