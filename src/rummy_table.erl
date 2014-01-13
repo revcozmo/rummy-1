@@ -25,7 +25,8 @@
                 players=[],
                 queue,
                 sets,
-                bank}).
+                bank,
+                timer}).
 
 -define(MAX_PLAYERS, 4).
 -include("rummy.hrl").
@@ -63,18 +64,19 @@ countdown(_Event, State) ->
     {next_state, countdown, State}.
 
 countdown(_Event, _From, State) ->
-    {reply, ok, countdown, State}.
+    {reply, {error, <<"Already in play">>}, countdown, State}.
 
-play(timeout, State=#state{limit=Limit}) ->
-    NewState = peek(undefined, State),
-    {next_state, play, NewState, Limit}.
+play(_Event, State) ->
+    {next_state, play, State}.
 
-play(peek, {Pid,_}, State=#state{limit=Limit}) ->
+play(peek, {Pid,_}, State=#state{timer=Timer, limit=Limit}) ->
     NewState = peek(Pid, State),
-    {reply, ok, play, NewState, Limit};
-play({put, List}, {Pid,_}, State=#state{limit=Limit}) ->
+    erlang:cancel_timer(Timer),
+    NewTimer = erlang:send_after(Limit, self(), timeout),
+    {reply, ok, play, NewState#state{timer=NewTimer}};
+play({put, List}, {Pid,_}, State) ->
     {Reply, NewStateName, NewState} = put(Pid, List, State),
-    {reply, Reply, NewStateName, NewState, Limit};
+    {reply, Reply, NewStateName, NewState};
 play(_, _, State) ->
     {reply, {error, <<"Already in play">>}, play, State}.
 
@@ -87,9 +89,14 @@ handle_sync_event(_Event, _From, StateName, State) ->
     Reply = ok,
     {reply, Reply, StateName, State}.
 
-handle_info(timeout, countdown, State=#state{queue=[Player|_],limit=Limit}) ->
+handle_info(timeout, countdown, State=#state{queue=[Player|_], limit=Limit}) ->
     broadcast({move, Player#player.name}, State),
-    {next_state, play, State, Limit};
+    Timer = erlang:send_after(Limit, self(), timeout), 
+    {next_state, play, State#state{timer=Timer}};
+handle_info(timeout, play, State=#state{limit=Limit}) ->
+    NewState = peek(undefined, State),
+    Timer = erlang:send_after(Limit, self(), timeout),
+    {next_state, play, NewState#state{timer=Timer}};
 handle_info({'DOWN', _, _, Pid, _}, StateName, State) ->
     handle_down(Pid, StateName, State);
 handle_info(_Info, StateName, State) ->
@@ -106,22 +113,28 @@ code_change(_OldVsn, StateName, State, _Extra) ->
 %%%=================================================================== 
 put(Pid1, _, #state{queue=[#player{pid=Pid2}|_]}=State) when Pid1 =/= Pid2 ->
     {{error, <<"Not your turn">>}, play, State};
-put(_Pid, List, #state{queue=[Player|_]=Queue, sets=OldSets}=State) ->
+put(_Pid, List, #state{queue=[Player|_]=Queue,sets=OldSets,
+                       timer=Timer,limit=Limit,players=Players}=State) ->
     NewSets = proplist_to_tiles(List), 
     case is_play_legal(NewSets, OldSets, Player) of
         false ->
             {{error, <<"Illegal play">>}, play, State};
         {true, NewPlayer} ->
             broadcast({set, List}, State),
-            NewQueue = lists:keystore(Player#player.name, #player.name, Queue, NewPlayer),
+            NewQueue = lists:keystore(Player#player.name, #player.name,
+                                      Queue, NewPlayer),
             NewState = rotate_queue(State#state{queue=NewQueue}),
             NewState1 = NewState#state{sets=NewSets},
+            erlang:cancel_timer(Timer),
+            NewTimer = erlang:send_after(Limit, self(), timeout),
+            NewState2 = NewState1#state{timer=NewTimer},
             case NewPlayer#player.tiles of
                 [] ->
                     broadcast({winner, NewPlayer#player.name}, State),
-                    {{ok,ok}, initial, NewState1};
+                    NewPlayers = [P#player{ready=false} || P <- Players],
+                    {{ok,ok}, initial, NewState2#state{players=NewPlayers}};
                 _ ->
-                    {{ok,ok}, play, NewState1}
+                    {{ok,ok}, play, NewState2}
             end
     end. 
 
@@ -145,7 +158,8 @@ is_play_legal(NewSets, OldSets, #player{tiles=Tiles, initial=Initial}=Player) ->
 
 peek(_, #state{bank=[]}=State) ->
     rotate_queue(State);
-peek(Pid1, #state{queue=[#player{pid=Pid2}|_]}=State) when Pid1 =/= Pid2, is_pid(Pid1) ->
+peek(Pid1, #state{queue=[#player{pid=Pid2}|_]}=State)
+        when Pid1 =/= Pid2, is_pid(Pid1) ->
     %% ignore, not this guy's turn
     State; 
 peek(_, #state{queue=[Player|_]=Queue, bank=[Tile|Bank]}=State) ->
@@ -161,7 +175,7 @@ rotate_queue(#state{queue=[Player,Next|Queue]}=State) ->
     broadcast({move, Next#player.name}, State),
     State#state{queue=NewQueue}.
 
-handle_down(Pid, StateName, #state{players=Players, id=Id}=State) ->
+handle_down(Pid, _StateName, #state{players=Players, id=Id}=State) ->
     case is_owner(Pid, Players) of
         true ->
             broadcast(exit, State),
@@ -175,7 +189,7 @@ handle_down(Pid, StateName, #state{players=Players, id=Id}=State) ->
                 _ ->
                     Players
             end,
-            {next_state, StateName, State#state{players=NewPlayers}}
+            {next_state, initial, State#state{players=NewPlayers}}
     end.
 
 handle_join(Name, From, #state{players=Players}=State) ->
@@ -204,8 +218,7 @@ handle_start(Pid, #state{players=Players}=State) ->
     NewPlayers = lists:keystore(Pid, #player.pid, Players, Player#player{ready=true}),
     broadcast({ready, Player#player.name}, State),
     error_logger:info_msg("User ~p ready", [Player]),
-    Length = length(Players),
-    case (length(ready_players(NewPlayers)) =:= Length andalso Length>1) of
+    case are_all_players_ready(NewPlayers) of
         true ->
             erlang:send_after(5000, self(), timeout),
             NewState = start_game(State),
@@ -246,11 +259,13 @@ broadcast(Message, #state{players=Players}) ->
 player_names(Players) ->
     [Name || #player{name=Name} <- Players].
 
-ready_players(Players) ->
-    lists:filter(fun
+are_all_players_ready(Players) ->
+    Ready = lists:filter(fun
             (#player{ready=true}) -> true;
             (_)                   -> false
-        end, Players).
+        end, Players),
+    Length = length(Players),
+    length(Ready) =:= Length andalso Length>1.
 
 send_tiles(#state{players=Players}) ->
     [Pid ! {room, {start, tiles_to_proplist(Tiles)}} ||

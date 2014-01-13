@@ -25,9 +25,11 @@ div.tile {
 
 div.set {
     height: 40px;
+    margin-right: 15px;
     margin-bottom: 10px;
     font-size: 22px;
     font-weight: bold;
+    float:left ;
 }
 
 div.black {

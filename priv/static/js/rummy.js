@@ -3,13 +3,21 @@ var backupSets = [];
 var backupTiles = [];
 var tiles = [];
 
+var renderTiles = function() {
+    $("#tiles").trigger('render', [tiles]);
+}
+
+var renderSets = function() {
+    $("#sets").trigger('render', [sets]);
+}
+
 var allowDrop = function (ev)
 {
     ev.preventDefault();
 }
 
 var idx = function(v) {
-    return v.split(" ")[2].split("-")[1];
+    return parseInt(v.split(" ")[2].split("-")[1]);
 }
 
 var drag = function(ev)
@@ -29,7 +37,8 @@ var drop = function(ev)
     var fromObj = tiles[from];
     tiles.splice(from, 1);
     tiles.splice(to, 0, fromObj);
-    $("#tiles").trigger('render', [tiles]);
+    backupTiles = tiles.slice(0);
+    renderTiles();
     ev.preventDefault();
 }
 
@@ -50,8 +59,8 @@ var dropNew = function(ev) {
         tiles.splice(from, 1);
         sets.splice(0, 0, [fromObj]);   
     }
-    $("#tiles").trigger('render', [tiles]);
-    $("#sets").trigger('render', [sets]);
+    renderTiles();
+    renderSets();
 }
 
 var dropExisting = function(ev) {
@@ -59,6 +68,8 @@ var dropExisting = function(ev) {
     var destination = ev.target.className;
     var from = idx(source);
     var to = idx(destination);
+    
+
     if(ev.dataTransfer.getData("set")) {
         var set = sets[ev.dataTransfer.getData("set")];
         var fromObj = set[from];
@@ -73,8 +84,8 @@ var dropExisting = function(ev) {
         tiles.splice(from, 1);
         sets[idx(ev.target.parentElement.className)].splice(to+1, 0, fromObj);
     }
-    $("#tiles").trigger('render', [tiles]);
-    $("#sets").trigger('render', [sets]); 
+    renderTiles();
+    renderSets();
 }
 
 $(document).ready(function() {
@@ -167,7 +178,6 @@ $(document).ready(function() {
                   return r;
               });
               $("#rooms-list").trigger('render', [rooms]);
-              //console.log(rooms);
           }
       }
     };
@@ -188,6 +198,11 @@ $(document).ready(function() {
                   });
             }
             else if(data[0].value == 'exit') {
+                $("#alert").text(data[1].value + ' HAS LEFT THE GAME!');
+                $("#alert").show();
+                Q.delay(5000).then(function() {
+                    $("#alert").hide();
+                })
                 var selector = "#room-players-list tr."+data[1].value;
                 $(selector).addClass("danger");
                 Q.delay(2000).then(function() {
@@ -202,15 +217,17 @@ $(document).ready(function() {
             }
             else if(data[0].value == 'start') {
                 tiles = data[1];
-                backupTiles = tiles.map(function(r) { return r; });
-                $("#tiles").trigger('render', [tiles]);
+                backupTiles = tiles.slice(0);
+                renderTiles();
                 $("#room-players-list td.time").html("");
             }
             else if(data[0].value == 'tile') {
+                tiles = backupTiles.map(function(r) { return r; });
                 tiles.push(data[1]);
-                backupTiles = tiles.map(function(r) { return r; });
-                $("#sets").trigger('render', [sets]);
-                $("#tiles").trigger('render', [tiles]);
+                sets = backupSets.slice(0);
+                backupTiles = tiles.slice(0);
+                renderSets();
+                renderTiles();
             }
             else if(data[0].value == 'move') {
                 $("#room-players-list td.time").html("");
@@ -226,26 +243,31 @@ $(document).ready(function() {
                 }, 1000);
                 if(oldUser && oldUser.value != username.value) {
                     sets = backupSets.map(function(r) { return r.slice(0); });
-                    tiles = backupTiles.map(function(r) { return r; });
+                    tiles = backupTiles.slice(0);
                 }
-                $("#tiles").trigger('render', [tiles]);
-                $("#sets").trigger('render', [sets]);
+                renderTiles();
+                renderSets();
             }
             else if(data[0].value == 'set') {
                 sets = data[1];
-                backupSets = [];
-                for(var i in sets) {
-                    backupSets.push(sets[i].slice(0));
-                }
-                $("#tiles").trigger('render', [tiles]);
-                $("#sets").trigger('render', [sets]);
+                backupSets = sets.map(function(r) { return r.slice(0); });
+                renderTiles();
+                renderSets();
             }
             else if(data[0].value == 'winner') {
-                $("#alert").text(data[1].value + 'HAS WON THE GAME!');
+                $("#alert").text(data[1].value + ' HAS WON THE GAME!');
                 $("#alert").show();
                 Q.delay(5000).then(function() {
                     $("#alert").hide();
-                })
+                });
+                tiles = [];
+                backupTiles = [];
+                sets = [];
+                backupSets = [];
+                renderTiles();
+                renderSets();
+                clearInterval(interval);
+                
             }
         }
     };
@@ -414,7 +436,7 @@ $(document).ready(function() {
         })
         .then(function() {
             $("#room-players-list").trigger('render', [roomUsers]);
-            $("#sets").trigger('render', [sets]);
+            renderSets();
             $("#ready").unbind('click').click(function() {
                call(Bert.atom('start')); 
             });
@@ -429,14 +451,17 @@ $(document).ready(function() {
             $("#reset").unbind('click').click(function() {
                 sets = backupSets.map(function(r) { return r.slice(0); });
                 tiles = backupTiles.map(function(r) { return r; });
-                $("#tiles").trigger('render', [tiles]);
-                $("#sets").trigger('render', [sets]);
+                renderTiles();
+                renderSets();
             });
         }).
         then(function() {
             sets = [];
             backupSets = [];
+            tiles = [];
+            backupTiles = [];
             clearInterval(interval);
+            $("#room-players-list td.time").html("");
         })
     }
     
