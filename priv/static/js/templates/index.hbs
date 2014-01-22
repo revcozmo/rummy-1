@@ -1,0 +1,13 @@
+<form class="form-signin" id="form-signin" role="form">
+    <h2 class="form-signin-heading">Enter your nickname</h2>
+    {{view App.NicknamefieldView type="text" valueBinding="nickname" id="form-signin-nickname" class="form-control" placeholder="Nickname"}}
+    {{view Ember.TextField type="password" valueBinding="password" id="form-signin-password" class="form-control" placeholder="Password"}}
+    <button class="btn btn-lg btn-primary btn-block" type="submit" {{action "login"}}>
+        Join the game
+        <span class="glyphicon glyphicon-log-in"></span>
+    </button>
+    <button class="btn btn-lg btn-default btn-block" {{action "register"}}>
+        Register
+        <span class="glyphicon glyphicon-hand-up"></span>
+    </button>
+</form>

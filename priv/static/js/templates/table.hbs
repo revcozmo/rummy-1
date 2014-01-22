@@ -1,0 +1,53 @@
+<div class="row">
+    <div class="col-md-9">
+        <div class="btn-group">
+            <button {{action 'send'}} type="button" class="btn btn-default" id="send">
+                OK
+            </button>
+            <button {{action 'peek'}} type="button" class="btn btn-default" id="peek">
+                Peek a tile
+            </button>
+            <button {{action 'reset'}} type="button" class="btn btn-default" id="reset">
+                Reset changes
+            </button>
+        </div>
+        <br/></br>
+        <div id="tiles">
+            {{#each tile in tiles}}
+                {{#view App.DeckTileView sourceBinding="tile" colorBinding="tile.color"}}{{tile.number}}{{/view}}
+            {{/each}}
+        </div>
+        <div id="sets">
+            {{#view App.NewTileView}}NEW SET{{/view}}
+            {{#each set in sets}}
+                <div class="set dummy">
+                    {{#each tile in set}}
+                        {{#view App.SetTileView sourceBinding="tile" colorBinding="tile.color" fromsetBinding="set"}}{{tile.number}}{{/view}}
+                    {{/each}}
+                </div>
+            {{/each}}
+        </div>
+    </div>
+    <div class="col-md-3">
+        <div class="btn-group">
+            <button {{action 'ready'}} type="button" class="btn btn-default" id="ready">
+                <span class="glyphicon glyphicon-new-window"></span>
+                I'm ready!
+            </button>
+            <button {{action 'quit'}} type="button" class="btn btn-default" id="quit">
+                <span class="glyphicon glyphicon-log-out"></span>
+                Quit room
+            </button>
+        </div>
+        <table class="table table-hover">
+            <thead>
+                <tr><th colspan="2">Players</th></tr>
+            </thead>
+            <tbody id="room-players-list">
+                {{#each users}}
+                <tr {{bind-attr class="class"}}><td>{{username.value}} <span class="badge">{{rank}}</span></td><td class="time">{{time}}</td></tr>
+                {{/each}}
+            </tbody>
+        </table>
+    </div>
+</div>

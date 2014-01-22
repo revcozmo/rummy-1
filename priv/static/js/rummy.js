@@ -100,7 +100,7 @@ $(document).ready(function() {
     var currentUser;
     var interval;
     
-    var call = function(term) {
+    /*var call = function(term) {
         return conn.call(term).then(function(reply) {
             if(reply[0].value == 'error') {
                 throw reply[1];
@@ -293,10 +293,10 @@ $(document).ready(function() {
         return deferred.promise;
     };
     
-    var loadLogin;
+    var loadLogin;*/
     
     // lobby initialization function
-    var loadLobby = function() {
+    /*var loadLobby = function() {
         return loadTemplate('lobby')
         .then(function() {
             $("#players-list").unbind('render').bind('render', function(event, users) {
@@ -357,7 +357,7 @@ $(document).ready(function() {
             $("#rooms-list").trigger('render', [rooms]);
         });
     };
-    
+    /*
     loadLogin = function() {
         return loadTemplate('login').then(function() {
             $("#form-signin").submit(function(event) {
@@ -372,7 +372,7 @@ $(document).ready(function() {
             });
         });
     };
-    
+    */
     var loadTable = function() {
         return loadTemplate('table').then(function() {
            $("#quit").unbind('click').click(function() {

@@ -90,7 +90,7 @@ handle_sync_event(_Event, _From, StateName, State) ->
     {reply, Reply, StateName, State}.
 
 handle_info(timeout, countdown, State=#state{queue=[Player|_], limit=Limit}) ->
-    broadcast({move, Player#player.name}, State),
+    broadcast({move, Player#player.name#user.username}, State),
     Timer = erlang:send_after(Limit, self(), timeout), 
     {next_state, play, State#state{timer=Timer}};
 handle_info(timeout, play, State=#state{limit=Limit}) ->
@@ -130,9 +130,13 @@ put(_Pid, List, #state{queue=[Player|_]=Queue,sets=OldSets,
             NewState2 = NewState1#state{timer=NewTimer},
             case NewPlayer#player.tiles of
                 [] ->
-                    broadcast({winner, NewPlayer#player.name}, State),
                     NewPlayers = [P#player{ready=false} || P <- Players],
-                    {{ok,ok}, initial, NewState2#state{players=NewPlayers}};
+                    NewPlayers1 = update_ranks(NewPlayer, NewPlayers),
+                    NewUsers = [U#player.name || U <- NewPlayers1],
+                    broadcast({winner, NewPlayer#player.name#user.username,
+                               user_to_proplist(NewUsers)}, State),
+                    rummy_lobby:update_ranks(NewUsers),
+                    {{ok,ok}, initial, NewState2#state{players=NewPlayers1}};
                 _ ->
                     {{ok,ok}, play, NewState2}
             end
@@ -172,7 +176,7 @@ peek(_, #state{queue=[Player|_]=Queue, bank=[Tile|Bank]}=State) ->
 
 rotate_queue(#state{queue=[Player,Next|Queue]}=State) ->
     NewQueue = [Next|Queue] ++ [Player],
-    broadcast({move, Next#player.name}, State),
+    broadcast({move, Next#player.name#user.username}, State),
     State#state{queue=NewQueue}.
 
 handle_down(Pid, _StateName, #state{players=Players, id=Id}=State) ->
@@ -184,7 +188,7 @@ handle_down(Pid, _StateName, #state{players=Players, id=Id}=State) ->
             NewPlayers = case lists:keyfind(Pid, #player.pid, Players) of
                 #player{name=Username} ->
                     rummy_lobby:exit_room(Id, Username),
-                    broadcast({exit, Username}, State),
+                    broadcast({exit, Username#user.username}, State),
                     lists:keydelete(Pid, #player.pid, Players);
                 _ ->
                     Players
@@ -195,7 +199,7 @@ handle_down(Pid, _StateName, #state{players=Players, id=Id}=State) ->
 handle_join(Name, From, #state{players=Players}=State) ->
     case length(Players)<?MAX_PLAYERS of
         true ->
-            case user_exists(From, Players) of
+            case user_exists(Name, From, Players) of
                 false ->
                     NewPlayers = [#player{name=Name,
                                           pid=From,
@@ -203,7 +207,7 @@ handle_join(Name, From, #state{players=Players}=State) ->
                                           role=player} | Players],
                     Reply = {ok,player_names(NewPlayers)},
                     erlang:monitor(process, From),
-                    broadcast({join, Name}, State),
+                    broadcast({join, user_to_proplist(Name)}, State),
                     {Reply, State#state{players=NewPlayers}};
                 true ->
                     {{error, <<"User already there">>}, State}
@@ -216,7 +220,7 @@ handle_join(Name, From, #state{players=Players}=State) ->
 handle_start(Pid, #state{players=Players}=State) ->
     Player = lists:keyfind(Pid, #player.pid, Players),
     NewPlayers = lists:keystore(Pid, #player.pid, Players, Player#player{ready=true}),
-    broadcast({ready, Player#player.name}, State),
+    broadcast({ready, Player#player.name#user.username}, State),
     error_logger:info_msg("User ~p ready", [Player]),
     case are_all_players_ready(NewPlayers) of
         true ->
@@ -247,10 +251,14 @@ is_owner(Pid, Players) ->
         _                   -> false
     end.
 
-user_exists(Pid, Players) ->
-    case lists:keyfind(Pid, #player.pid, Players) of
+user_exists(Name, Pid, Players) ->
+    case lists:keyfind(Name, #player.name, Players) of
         #player{} -> true;
-        _         -> false
+        _ ->
+            case lists:keyfind(Pid, #player.pid, Players) of
+                #player{} -> true;
+                _         -> false
+            end
     end.
 
 broadcast(Message, #state{players=Players}) ->
@@ -282,3 +290,45 @@ tiles_to_proplist(List) when is_list(List) ->
     [tiles_to_proplist(Tile) || Tile <- List];
 tiles_to_proplist(#card{color=Color, number=Number}) ->
     [{color, Color}, {number, Number}].
+
+user_to_proplist(List) when is_list(List) ->
+    [user_to_proplist(User) || User <- List];
+user_to_proplist(#user{username=Username, rank=Rank}) ->
+    [{username, Username}, {rank, Rank}].
+
+update_ranks(Winner, All) ->
+    lists:foldr(fun
+            (Player, Acc) when Player#player.name =:= Winner#player.name ->
+                NewRank = count_new_rank(Player, All--[Player], 1),
+                NewUser = set_new_rank(NewRank, Player#player.name#user.username),
+                [Player#player{name=NewUser} | Acc];
+            (Player, Acc) ->
+                NewRank = count_new_rank(Player, All--[Player], 0),
+                NewUser = set_new_rank(NewRank, Player#player.name#user.username),
+                [Player#player{name=NewUser} | Acc]
+        end, [], All).
+
+set_new_rank(Rank, User) ->
+    F = fun() ->
+            [U] =  mnesia:read(user, User),
+            NewUser =  U#user{rank=erlang:round(Rank)},
+            mnesia:write(NewUser),
+            NewUser
+    end,
+    {atomic, Ret} = mnesia:transaction(F),
+    Ret.
+
+count_new_rank(User, Others, Win) when is_list(Others) ->
+    lists:sum([count_new_rank(User, Other, Win) || Other <- Others]) /
+    length(Others);
+count_new_rank(#player{name=#user{rank=X}},
+               #player{name=#user{rank=Y}}, Win) ->
+    D = Y-X,
+    W = 1/(1+math:pow(10,D/400)),
+    Diff = Win - W,
+    K = case X of
+        K1 when K1 < 2100 -> 32;
+        K2 when K2 > 2400 -> 16;
+        _ -> 24
+    end,
+    X + K*Diff.

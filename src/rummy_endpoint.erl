@@ -14,9 +14,24 @@
 init([]) ->
     {ok, #state{}}.
 
-handle_call({join, Username}, State) ->
+handle_call({register, Username, Password}, State) ->
     NewState = State#state{username=Username},
-    {reply, rummy_lobby:join(Username), NewState};
+    case rummy_user:register(Username, Password) of
+        {ok, User} ->
+            rummy_lobby:join(User),
+            {reply, {ok, ok}, NewState};
+        Other ->
+            {reply, Other, NewState}
+    end;
+handle_call({login, Username, Password}, State) ->
+    NewState = State#state{username=Username},
+    case rummy_user:login(Username, Password) of
+        {ok,User} ->
+            rummy_lobby:join(User),
+            {reply, {ok, ok}, NewState};
+        Other ->
+            {reply, Other, NewState}
+    end;
 handle_call(logout, State) ->
     {reply, rummy_lobby:logout(), State#state{id=undefined,pid=undefined}};
 handle_call(get_rooms, State) ->

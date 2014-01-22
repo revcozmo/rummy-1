@@ -1,0 +1,43 @@
+<div class="row">
+    <div class="col-md-9">
+        <table class="table table-hover">
+            <thead>
+                <tr><th>Tables (click to join)</th></tr>
+            </thead>
+                        
+            <tbody id="rooms-list">
+                {{#each rooms}}
+                    <tr {{bind-attr class="class"}} {{action 'join' this}}><td><em><small>{{id.value}}</small></em><br/>
+                        <div class="btn-group">
+                            {{#each members}}
+                                <button type="button" class="btn btn-default">{{username.value}}</button>
+                            {{/each}}
+                        </div>
+                    </td></tr>
+                {{/each}}
+            </tbody>
+        </table>
+    </div>
+    <div class="col-md-3">
+        <div class="btn-group">
+          <button type="button" class="btn btn-default" id="create-room" {{action 'create'}}>
+              <span class="glyphicon glyphicon-new-window"></span>
+              Create room
+          </button>
+          <button type="button" class="btn btn-default" id="logout" {{action 'logout'}}>
+              <span class="glyphicon glyphicon-log-out"></span>
+              Logout
+          </button>
+        </div>
+        <table class="table table-hover">
+            <thead>
+                <tr><th>Players</th></tr>
+            </thead>
+            <tbody id="players-list">
+                {{#each users}}
+                    <tr {{bind-attr class="class"}}><td>{{username.value}} <span class="badge">{{rank}}</span></td></tr>
+                {{/each}}
+            </tbody>
+        </table>
+    </div>
+</div>

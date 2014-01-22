@@ -13,14 +13,26 @@ div#tiles {
 }
 
 div.tile {
-    width: 30px;
-    height: 40px;
-    border-style: solid;
-    border-width: 2px;
+    padding-top: 5px;
+    width: 50px;
+    height: 74px;
+    font-size: 26px;
+    font-weight: bold;
+    float: left;
+    text-align: center;
+    background-image: url('../img/tile.png');
+    text-shadow: -1px 0 black, 0 1px black, 1px 0 black, 0 -1px black;
+}
+
+div.joker {
+    padding-top: 8px;
+    width: 50px;
+    height: 74px;
     font-size: 20px;
     font-weight: bold;
     float: left;
     text-align: center;
+    background-image: url('../img/joker.png');
 }
 
 div.set {
@@ -74,5 +86,8 @@ div.red {
   z-index: 2;
 }
 .form-signin input[type="text"] {
+  margin-bottom: 0px;
+}
+.form-signin input[type="password"] {
   margin-bottom: 10px;
 }

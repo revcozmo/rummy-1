@@ -1,0 +1,9 @@
+<div class="container">
+    {{#if error}}
+    <div class="alert alert-danger">
+        <button type="button" class="close" {{action "dismissError"}}>&times;</button>
+        {{error.message}}
+    </div>
+    {{/if}}
+    {{outlet}}
+</div>
